@@ -1,14 +1,10 @@
 use crate::{
     descriptors::{
-        decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor,
-        DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
+        decode_string_descriptor, validate_string_descriptor, ConfigurationDescriptor, DeviceDescriptor, InterfaceDescriptor, DESCRIPTOR_TYPE_STRING,
     },
     io::{EndpointRead, EndpointWrite},
     platform,
-    transfer::{
-        Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection,
-        EndpointType, In, Out, TransferError,
-    },
+    transfer::{Buffer, BulkOrInterrupt, Completion, ControlIn, ControlOut, Direction, EndpointDirection, EndpointType, In, Out, TransferError},
     ActiveConfigurationError, DeviceInfo, Error, ErrorKind, GetDescriptorError, MaybeFuture, Speed,
 };
 use log::{error, warn};
@@ -21,6 +17,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use std::sync::Weak;
 
 /// An opened USB device.
 ///
@@ -63,14 +60,8 @@ impl Device {
     }
 
     /// Open an interface of the device and claim it for exclusive use.
-    pub fn claim_interface(
-        &self,
-        interface: u8,
-    ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend
-            .clone()
-            .claim_interface(interface)
-            .map(|i| i.map(Interface::wrap))
+    pub fn claim_interface(&self, interface: u8) -> impl MaybeFuture<Output = Result<Interface, Error>> {
+        self.backend.clone().claim_interface(interface).map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers and open an interface of the device and claim it for exclusive use.
@@ -78,14 +69,8 @@ impl Device {
     /// ### Platform notes
     /// This function can only detach kernel drivers on Linux. Calling on other platforms has
     /// the same effect as [`claim_interface`][`Device::claim_interface`].
-    pub fn detach_and_claim_interface(
-        &self,
-        interface: u8,
-    ) -> impl MaybeFuture<Output = Result<Interface, Error>> {
-        self.backend
-            .clone()
-            .detach_and_claim_interface(interface)
-            .map(|i| i.map(Interface::wrap))
+    pub fn detach_and_claim_interface(&self, interface: u8) -> impl MaybeFuture<Output = Result<Interface, Error>> {
+        self.backend.clone().detach_and_claim_interface(interface).map(|i| i.map(Interface::wrap))
     }
 
     /// Detach kernel drivers for the specified interface.
@@ -131,16 +116,12 @@ impl Device {
     /// This returns cached data and does not perform IO. However, it can fail if the
     /// device is unconfigured, or if it can't find a configuration descriptor for
     /// the configuration reported as active by the OS.
-    pub fn active_configuration(
-        &self,
-    ) -> Result<ConfigurationDescriptor, ActiveConfigurationError> {
+    pub fn active_configuration(&self) -> Result<ConfigurationDescriptor, ActiveConfigurationError> {
         let active = self.backend.active_configuration_value();
 
         self.configurations()
             .find(|c| c.configuration_value() == active)
-            .ok_or(ActiveConfigurationError {
-                configuration_value: active,
-            })
+            .ok_or(ActiveConfigurationError { configuration_value: active })
     }
 
     /// Get an iterator returning information about each configuration of the device.
@@ -158,10 +139,7 @@ impl Device {
     ///
     /// ### Platform-specific notes
     /// * Not supported on Windows
-    pub fn set_configuration(
-        &self,
-        configuration: u8,
-    ) -> impl MaybeFuture<Output = Result<(), Error>> {
+    pub fn set_configuration(&self, configuration: u8) -> impl MaybeFuture<Output = Result<(), Error>> {
         self.backend.clone().set_configuration(configuration)
     }
 
@@ -219,20 +197,17 @@ impl Device {
         &self,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<impl Iterator<Item = u16>, GetDescriptorError>> {
-        self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout)
-            .map(move |r| {
-                let data = r?;
-                if !validate_string_descriptor(&data) {
-                    error!("String descriptor language list read {data:?}, not a valid string descriptor");
-                    return Err(GetDescriptorError::InvalidDescriptor)
-                }
+        self.get_descriptor(DESCRIPTOR_TYPE_STRING, 0, 0, timeout).map(move |r| {
+            let data = r?;
+            if !validate_string_descriptor(&data) {
+                error!("String descriptor language list read {data:?}, not a valid string descriptor");
+                return Err(GetDescriptorError::InvalidDescriptor);
+            }
 
-                //TODO: Use array_chunks once stable
-                let mut iter = data.into_iter().skip(2);
-                Ok(std::iter::from_fn(move || {
-                    Some(u16::from_le_bytes([iter.next()?, iter.next()?]))
-                }))
-            })
+            //TODO: Use array_chunks once stable
+            let mut iter = data.into_iter().skip(2);
+            Ok(std::iter::from_fn(move || Some(u16::from_le_bytes([iter.next()?, iter.next()?]))))
+        })
     }
 
     /// Request a string descriptor from the device.
@@ -250,13 +225,7 @@ impl Device {
         language_id: u16,
         timeout: Duration,
     ) -> impl MaybeFuture<Output = Result<String, GetDescriptorError>> {
-        self.get_descriptor(
-            DESCRIPTOR_TYPE_STRING,
-            desc_index.get(),
-            language_id,
-            timeout,
-        )
-        .map(|r| {
+        self.get_descriptor(DESCRIPTOR_TYPE_STRING, desc_index.get(), language_id, timeout).map(|r| {
             let data = r?;
             decode_string_descriptor(&data).map_err(|_| GetDescriptorError::InvalidDescriptor)
         })
@@ -302,11 +271,7 @@ impl Device {
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-    pub fn control_in(
-        &self,
-        data: ControlIn,
-        timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
+    pub fn control_in(&self, data: ControlIn, timeout: Duration) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.backend.clone().control_in(data, timeout)
     }
 
@@ -339,11 +304,7 @@ impl Device {
     /// * Not supported on Windows. You must [claim an interface][`Device::claim_interface`]
     ///   and use the interface handle to submit transfers.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
-    pub fn control_out(
-        &self,
-        data: ControlOut,
-        timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
+    pub fn control_out(&self, data: ControlOut, timeout: Duration) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.backend.clone().control_out(data, timeout)
     }
 }
@@ -418,11 +379,7 @@ impl Interface {
     ///   become an error in the future.
     /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
     ///   argument is ignored.
-    pub fn control_in(
-        &self,
-        data: ControlIn,
-        timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
+    pub fn control_in(&self, data: ControlIn, timeout: Duration) -> impl MaybeFuture<Output = Result<Vec<u8>, TransferError>> {
         self.backend.clone().control_in(data, timeout)
     }
 
@@ -460,11 +417,7 @@ impl Interface {
     ///   become an error in the future.
     /// * On Windows, the timeout is currently fixed to 5 seconds and the timeout
     ///   argument is ignored.
-    pub fn control_out(
-        &self,
-        data: ControlOut,
-        timeout: Duration,
-    ) -> impl MaybeFuture<Output = Result<(), TransferError>> {
+    pub fn control_out(&self, data: ControlOut, timeout: Duration) -> impl MaybeFuture<Output = Result<(), TransferError>> {
         self.backend.clone().control_out(data, timeout)
     }
 
@@ -479,11 +432,7 @@ impl Interface {
     pub fn descriptors(&self) -> impl Iterator<Item = InterfaceDescriptor> {
         let active = self.backend.device.active_configuration_value();
 
-        let configuration = self
-            .backend
-            .device
-            .configuration_descriptors()
-            .find(|c| c.configuration_value() == active);
+        let configuration = self.backend.device.configuration_descriptors().find(|c| c.configuration_value() == active);
 
         configuration
             .into_iter()
@@ -493,23 +442,15 @@ impl Interface {
 
     /// Get the interface descriptor for the current alternate setting.
     pub fn descriptor(&self) -> Option<InterfaceDescriptor> {
-        self.descriptors()
-            .find(|i| i.alternate_setting() == self.get_alt_setting())
+        self.descriptors().find(|i| i.alternate_setting() == self.get_alt_setting())
     }
 
     /// Open an endpoint.
-    pub fn endpoint<EpType: EndpointType, Dir: EndpointDirection>(
-        &self,
-        address: u8,
-    ) -> Result<Endpoint<EpType, Dir>, Error> {
+    pub fn endpoint<EpType: EndpointType, Dir: EndpointDirection>(&self, address: u8) -> Result<Endpoint<EpType, Dir>, Error> {
         let intf_desc = self.descriptor();
-        let ep_desc =
-            intf_desc.and_then(|desc| desc.endpoints().find(|ep| ep.address() == address));
+        let ep_desc = intf_desc.and_then(|desc| desc.endpoints().find(|ep| ep.address() == address));
         let Some(ep_desc) = ep_desc else {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                "specified endpoint does not exist on this interface",
-            ));
+            return Err(Error::new(ErrorKind::NotFound, "specified endpoint does not exist on this interface"));
         };
 
         if address & Direction::MASK != Dir::DIR as u8 {
@@ -527,13 +468,51 @@ impl Interface {
             ep_dir: PhantomData,
         })
     }
+
+    /// Creates a new [`WeakInterface`] to this interface.
+    pub fn downgrade(&self) -> WeakInterface {
+        WeakInterface::wrap(Arc::downgrade(&self.backend))
+    }
 }
 
 impl Debug for Interface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Interface")
-            .field("number", &self.backend.interface_number)
-            .finish()
+        f.debug_struct("Interface").field("number", &self.backend.interface_number).finish()
+    }
+}
+
+/// A weak reference to an interface of a USB device.
+///
+/// A [`WeakInterface`] is to an [`Interface`] what a [`Weak`](std::sync::Weak)
+/// is to an [`Arc`](std::sync::Arc): It holds a non-owning reference to the
+/// backend.
+///
+/// Like [`Weak`](std::sync::Weak), it can be obtained from an `Interface` by
+/// calling [`downgrade()`](Interface::downgrade) on it, and
+/// [`upgraded`](upgrade) again to an [`Interface`].
+
+#[derive(Clone)]
+pub struct WeakInterface {
+    backend: Weak<platform::Interface>,
+}
+
+impl WeakInterface {
+    pub(crate) fn wrap(backend: Weak<platform::Interface>) -> Self {
+        WeakInterface { backend }
+    }
+
+    /// Attempts to upgrade the `WeakInterface` to an `Interface`, claiming
+    /// shared ownership.
+    ///
+    /// Returns [`None`] if the underlying interface has since been released.
+    pub fn upgrade(&self) -> Option<Interface> {
+        self.backend.upgrade().map(|backend| Interface::wrap(backend))
+    }
+}
+
+impl Debug for WeakInterface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakInterface").finish()
     }
 }
 
@@ -739,10 +718,7 @@ impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Endpoint<EpType, Dir> {
 impl<EpType: BulkOrInterrupt, Dir: EndpointDirection> Debug for Endpoint<EpType, Dir> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Endpoint")
-            .field(
-                "address",
-                &format_args!("0x{:02x}", self.endpoint_address()),
-            )
+            .field("address", &format_args!("0x{:02x}", self.endpoint_address()))
             .field("type", &EpType::TYPE)
             .field("direction", &Dir::DIR)
             .finish()
