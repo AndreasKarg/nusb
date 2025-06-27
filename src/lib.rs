@@ -142,7 +142,7 @@ mod enumeration;
 pub use enumeration::{BusInfo, DeviceId, DeviceInfo, InterfaceInfo, Speed, UsbControllerType};
 
 mod device;
-pub use device::{Device, Endpoint, Interface};
+pub use device::{Device, Endpoint, Interface, WeakInterface};
 
 pub mod transfer;
 
