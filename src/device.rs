@@ -508,6 +508,11 @@ impl WeakInterface {
     pub fn upgrade(&self) -> Option<Interface> {
         self.backend.upgrade().map(|backend| Interface::wrap(backend))
     }
+
+    /// Returns the number of strong references to the underlying interface.
+    pub fn strong_count(&self) -> usize {
+        self.backend.strong_count()
+    }
 }
 
 impl Debug for WeakInterface {
